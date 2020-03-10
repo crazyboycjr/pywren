@@ -76,8 +76,7 @@ class Storage(object):
         :param module_data: serialized module dependencies
         :return: None
         """
-        module_data_str = pickle.dumps(module_data)
-        return self.backend_handler.put_object(key, module_data_str)
+        return self.backend_handler.put_object(key, module_data)
 
     def put_cancelled(self, callset_id, call_id, cancelled_data):
         """

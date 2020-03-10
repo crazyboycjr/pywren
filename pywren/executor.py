@@ -61,7 +61,6 @@ class Executor(object):
             self.serializer = serialize.SerializeIndependent(self.runtime_meta_info['preinstalls'])
         else:
             self.serializer = serialize.SerializeIndependent()
-        self.module_data_cache = {}
 
         self.map_item_limit = None
         if 'scheduler' in self.config:
@@ -183,23 +182,20 @@ class Executor(object):
 
         user_key = hint
         if from_shared_storage:
-            storage_key = create_mod_key(self.storage.prefix, user_key)
-            self.module_data_cache[user_key] = self.storage.get_module_dependencies(storage_key)
-            logger.debug('synced from shared storage, user_key: {}, storage_key: {}'.format(user_key, storage_key))
             return
 
-        if user_key not in self.module_data_cache:
-            logger.debug('user_key: {} misses, parsing...'.format(user_key))
-            _, mod_paths = self.serializer([func])
-            module_data = create_mod_data(mod_paths)
-            self.module_data_cache[user_key] = module_data
-        else:
-            logger.debug('user_key: {} hits'.format(user_key))
+        start = time.time()
+        func_str, mod_paths = self.serializer([func])
+        func_str = func_str[0]
+        module_data = create_mod_data(mod_paths)
+        func_module_str = pickle.dumps({'func' : func_str, 'module_data' : module_data}, -1)
+        end = time.time()
+        logger.debug('function {} serialize time: {} secs'.format(user_key, end - start))
 
         if sync_to_shared_storage:
             storage_key = create_mod_key(self.storage.prefix, user_key)
-            self.storage.put_module_dependencies(storage_key, module_data)
-            logger.debug('synced to shared storage, user_key: {}, storage_key: {}'.format(user_key, storage_key))
+            self.storage.put_module_dependencies(storage_key, func_module_str)
+            logger.debug('function and module dependencies has synced to shared storage, user_key: {}, storage_key: {}'.format(user_key, storage_key))
 
     def map(self, func, iterdata, extra_env=None, extra_meta=None,
             invoke_pool_threads=64, data_all_as_one=True,
@@ -241,7 +237,8 @@ class Executor(object):
         ### pickle func and all data (to capture module dependencies
         ### this serializer function to get `mod_paths` can be time consuming (~4 seconds in some cases)
         ### so we leave user decide whether to do this operation
-        if module_dependencies_key is None or self.module_data_cache.get(module_dependencies_key) is None:
+        #if module_dependencies_key is None or self.module_data_cache.get(module_dependencies_key) is None:
+        if module_dependencies_key is None:
             func_and_data_ser, mod_paths = self.serializer([func] + data)
         else:
             func_and_data_ser, _ = self.serializer([func] + data, _ignore_module_dependencies=True)
@@ -275,21 +272,27 @@ class Executor(object):
 
         ### this function `create_mod_data` read from loacl disk, could also be time consuming,
         ### e.g. ~0.3 seconds, so we cache the results by `module_dependencies_key`
-        if module_dependencies_key is None or self.module_data_cache.get(module_dependencies_key) is None:
+        #if module_dependencies_key is None or self.module_data_cache.get(module_dependencies_key) is None:
+        if module_dependencies_key is None:
             module_data = create_mod_data(mod_paths)
-            if module_dependencies_key is not None:
-                self.module_data_cache[module_dependencies_key] = module_data
-        else:
-            module_data = self.module_data_cache.get(module_dependencies_key)
+            func_module_str = pickle.dumps({'func' : func_str, 'module_data' : module_data}, -1)
 
         ### Create func and upload
-        func_module_str = pickle.dumps({'func' : func_str,
-                                        'module_data' : module_data}, -1)
-        host_job_meta['func_module_str_len'] = len(func_module_str)
 
         func_upload_time = time.time()
-        func_key = create_func_key(self.storage.prefix, callset_id)
-        self.storage.put_func(func_key, func_module_str)
+        if module_dependencies_key is None:
+            func_module_str = pickle.dumps({'func' : func_str,
+                                            'module_data' : module_data}, -1)
+            host_job_meta['func_module_str_len'] = len(func_module_str)
+            func_key = create_func_key(self.storage.prefix, callset_id)
+            self.storage.put_func(func_key, func_module_str)
+        else:
+            ### do not put serialized function and its dependencies to storage, as we have done it before
+            ### just generate the correct func_key
+            func_key = create_mod_key(self.storage.prefix, module_dependencies_key)
+            # just fill with some arbitrary value
+            host_job_meta['func_module_str_len'] = 0
+
         host_job_meta['func_upload_time'] = time.time() - func_upload_time
         host_job_meta['func_upload_timestamp'] = time.time()
         def invoke(data_str, callset_id, call_id, func_key,
