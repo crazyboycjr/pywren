@@ -54,7 +54,11 @@ class Executor(object):
         self.storage_config = wrenconfig.extract_storage_config(self.config)
         self.storage = storage.Storage(self.storage_config)
         self.runtime_meta_info = runtime.get_runtime_info(config['runtime'])
+        # print('runtime_meta_info: ', self.runtime_meta_info)
 
+        self.runtime_meta_info['preinstalls'].append(['pandas', True])
+        self.runtime_meta_info['preinstalls'].append(['thrift', True])
+        self.runtime_meta_info['preinstalls'].append(['Thrift', True])
 
         if 'preinstalls' in self.runtime_meta_info:
             logger.info("using serializer with meta-supplied preinstalls")
